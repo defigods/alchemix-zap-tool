@@ -19,6 +19,9 @@ export const theme = createTheme({
           ":hover": {
             backgroundColor: "inherit",
           },
+          ":disabled": {
+            color: "#222",
+          },
         },
       },
     },

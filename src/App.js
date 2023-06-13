@@ -10,12 +10,12 @@ const Header = () => {
   const handleConnect = () => (connected ? disconnect() : connect());
 
   return (
-    <Box className="flex fr ai-c fj-sb" sx={{ py: "0.5rem", px: "1rem" }}>
+    <Box className="flex ai-c fj-sb" sx={{ py: "0.5rem", px: "1rem" }}>
       <Typography
         sx={{ cursor: "pointer" }}
         onClick={() => (window.location.href = "/")}
       >
-        Alchemix Tool
+        Alchemix Zap Tool
       </Typography>
       <Button
         sx={{

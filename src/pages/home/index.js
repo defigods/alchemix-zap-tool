@@ -1,5 +1,5 @@
 /* eslint-disable import/no-anonymous-default-export */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Box,
   Grid,
@@ -8,32 +8,95 @@ import {
   Select,
   TextField,
   Typography,
+  CircularProgress,
 } from "@mui/material";
+import { utils } from "ethers";
 import {
   currencies,
+  useAlchemixPosition,
   getTokenSymbol,
   useUnderlyingTokens,
   useWeb3Context,
   useYieldTokens,
+  depositUnderlying,
+  useTokenInfo,
+  approveToken,
+  useMaximumMintableAmount,
+  ChainIds,
+  depositAndBorrow,
 } from "../../utils";
+import { ExpandLessOutlined, ExpandMoreOutlined } from "@mui/icons-material";
 
 const renderPlaceholder = (value, text) =>
-  value.length === 0 ? () => <Typography>{text}</Typography> : undefined;
+  value.length === 0 || value < 0
+    ? () => <Typography>{text}</Typography>
+    : undefined;
 
 export default () => {
-  const { chainId, connected, connect, provider } = useWeb3Context();
+  const { address, chainId, connected, connect, provider } = useWeb3Context();
   const { tokens } = useUnderlyingTokens(chainId, provider);
   const { mapping } = useYieldTokens(chainId, provider);
 
+  const [isPending, setPending] = useState(false);
   const [underlyingTokens, setUnderlyingTokens] = useState([]);
   const [depositAsset, setDepositAsset] = useState("");
+  const [depositAmount, setDepositAmount] = useState("");
   const [yieldTokens, setYieldTokens] = useState([]);
-  const [yieldStrategy, setYieldStrategy] = useState("");
+  const [yieldToken, setYieldToken] = useState(-1);
+  const [showLoans, setShowLoans] = useState(false);
   const [loanAssets, setLoanAssets] = useState([]);
   const [loanAsset, setLoanAsset] = useState("");
-  const [fromAmount, setFromAmount] = useState("0");
-  const [toAmount, setToAmount] = useState("0");
   const [loanAmount, setLoanAmount] = useState("");
+
+  const { balance: positionBalance } = useAlchemixPosition(
+    depositAsset,
+    yieldToken > -1 &&
+      mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
+        yieldToken
+      ],
+    address,
+    chainId,
+    provider,
+    isPending
+  );
+  const { balance: depositBalance, allowance: depositAllowance } = useTokenInfo(
+    depositAsset,
+    address,
+    chainId,
+    provider,
+    isPending
+  );
+  const { maximumAmount } = useMaximumMintableAmount(
+    depositAsset,
+    depositAmount,
+    address,
+    chainId,
+    provider
+  );
+
+  const depositDecimals = useMemo(() => {
+    return currencies[depositAsset]?.decimals || 18;
+  }, [depositAsset]);
+
+  const depositBalanceInsufficient = useMemo(
+    () => +depositAmount > +utils.formatUnits(depositBalance, depositDecimals),
+    [depositAmount, depositBalance, depositDecimals]
+  );
+
+  const depositAllowanceInsufficient = useMemo(
+    () =>
+      +depositAmount > +utils.formatUnits(depositAllowance, depositDecimals),
+    [depositAmount, depositAllowance, depositDecimals]
+  );
+
+  const loanDecimals = useMemo(() => {
+    return currencies[loanAsset]?.decimals || 18;
+  }, [loanAsset]);
+
+  const loanAmountExceedsLimit = useMemo(
+    () => +loanAmount > +utils.formatUnits(maximumAmount, depositDecimals),
+    [loanAmount, maximumAmount, depositDecimals]
+  );
 
   useEffect(() => {
     const fetch = async () => {
@@ -65,20 +128,80 @@ export default () => {
       }
     };
     if (depositAsset.length > 0) {
-      setLoanAssets([
-        depositAsset,
-        `AL${depositAsset.includes("ETH") ? "ETH" : "USD"}`,
-      ]);
-      setYieldStrategy("");
+      const assets = [];
+      // TODO: allow for next version
+      if (process.env.SUPPORT_ALSWAP) assets.push(depositAsset);
+      if (chainId !== ChainIds.Fantom || !depositAsset.includes("ETH"))
+        assets.push(`AL${depositAsset.includes("ETH") ? "ETH" : "USD"}`);
+      setLoanAssets(assets);
+      setYieldToken(-1);
       fetch();
     }
   }, [provider, mapping, depositAsset, chainId]);
 
-  const handleAmountChange = (e) => {
-    const re = /^[0-9\b]+{.}[0-9\b]+$/;
-    if (e.target.value === "" || re.test(e.target.value))
-      setLoanAmount(e.target.value);
+  useEffect(() => {
+    setDepositAmount(getAmountForDecimals(depositAmount, depositAsset));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depositAsset]);
+
+  const shouldDisable = useMemo(
+    () =>
+      isPending ||
+      (connected &&
+        (depositAsset.length === 0 ||
+          Number(depositAmount) === 0 ||
+          depositBalanceInsufficient ||
+          (!depositAllowanceInsufficient &&
+            (yieldToken === -1 ||
+              (showLoans &&
+                (Number(loanAmount) === 0 ||
+                  loanAmountExceedsLimit ||
+                  loanAsset.length === 0)))))),
+    [
+      isPending,
+      connected,
+      depositAsset,
+      depositAmount,
+      depositBalanceInsufficient,
+      depositAllowanceInsufficient,
+      yieldToken,
+      showLoans,
+      loanAmount,
+      loanAmountExceedsLimit,
+      loanAsset,
+    ]
+  );
+
+  const getAmountForDecimals = (amount, asset) => {
+    if (+amount >= 1000000000) return;
+
+    let decimals = 18;
+    try {
+      decimals = currencies[asset].decimals;
+    } catch (_) {
+      console.warn("Deposit asset not selected yet");
+    }
+
+    const [integerPart, decimalPart] = amount.split(".");
+    return decimals && decimalPart?.length && decimalPart?.length > decimals
+      ? integerPart.trim() + "." + decimalPart.trim().substring(0, decimals)
+      : amount.trim();
   };
+
+  const handleAmountChange = (amount, index) => {
+    const amountStr = getAmountForDecimals(
+      amount,
+      [depositAsset, loanAsset][index]
+    );
+    if (!isNaN(Number(amountStr)) && !amountStr.includes("e"))
+      [setDepositAmount, setLoanAmount][index](amountStr);
+  };
+
+  const setMaxDeposit = () =>
+    setDepositAmount(utils.formatUnits(depositBalance, depositDecimals));
+
+  const setMaxBorrow = () =>
+    setLoanAmount(utils.formatUnits(maximumAmount, depositDecimals));
 
   const handleDeposit = async () => {
     if (!connected) {
@@ -86,7 +209,55 @@ export default () => {
       return;
     }
 
-    if (!provider) return;
+    const amount = utils.parseUnits(depositAmount, depositDecimals);
+    if (depositAllowanceInsufficient) {
+      try {
+        setPending(true);
+        const tx = await approveToken(depositAsset, amount, address, provider);
+        await tx.wait();
+      } catch (e) {
+        console.error("Approve failure", e);
+      } finally {
+        setPending(false);
+        return;
+      }
+    }
+
+    if (!showLoans) {
+    }
+
+    try {
+      setPending(true);
+
+      let tx;
+
+      if (!showLoans)
+        tx = await depositUnderlying(
+          depositAsset,
+          mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
+            yieldToken
+          ],
+          amount,
+          address,
+          provider
+        );
+      else
+        tx = await depositAndBorrow(
+          depositAsset,
+          mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
+            yieldToken
+          ],
+          amount,
+          utils.parseUnits(loanAmount, loanDecimals),
+          address,
+          provider
+        );
+      await tx.wait();
+    } catch (e) {
+      console.error("Deposit failure", e);
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -109,12 +280,13 @@ export default () => {
                 border: "1px solid gray",
               }}
             >
-              <Box className="flex fr ai-c fj-sb">
+              <Box className="flex ai-c fj-sb">
                 <TextField
-                  disabled
-                  value={fromAmount}
+                  value={depositAmount}
+                  onChange={(e) => handleAmountChange(e.target.value, 0)}
                   variant="standard"
                   placeholder="0"
+                  sx={{ mr: "0.5rem" }}
                   InputProps={{
                     disableUnderline: true,
                     sx: { fontSize: "2rem" },
@@ -135,7 +307,7 @@ export default () => {
                     .filter(([x]) => underlyingTokens.includes(x))
                     .map(([symbol, { icon }]) => (
                       <MenuItem value={symbol} key={`underlying-${symbol}`}>
-                        <Box className="flex fr ai-c">
+                        <Box className="flex ai-c">
                           <img
                             style={{
                               height: "28px",
@@ -151,7 +323,24 @@ export default () => {
                     ))}
                 </Select>
               </Box>
-              <Typography color="gray">${fromAmount}</Typography>
+              <Box className="flex ai-c fj-sb">
+                <Typography color="gray">${Number(depositAmount)}</Typography>
+                <Typography className="flex ai-c" color="gray">
+                  Balance:{" "}
+                  {(+utils.formatUnits(
+                    depositBalance,
+                    depositDecimals
+                  )).toFixed(4)}
+                  &nbsp;
+                  <Typography
+                    onClick={setMaxDeposit}
+                    color="white"
+                    sx={{ cursor: "pointer" }}
+                  >
+                    MAX
+                  </Typography>
+                </Typography>
+              </Box>
             </Box>
             <Box
               sx={{
@@ -161,91 +350,127 @@ export default () => {
                 border: "1px solid gray",
               }}
             >
-              <Box className="flex fr ai-c fj-sb">
-                <TextField
-                  disabled
-                  value={toAmount}
-                  variant="standard"
-                  placeholder="0"
-                  InputProps={{
-                    disableUnderline: true,
-                    sx: { fontSize: "2rem" },
-                  }}
-                />
+              <Box className="flex ai-c fj-sb">
+                <Box className="flex ai-c">
+                  <Typography
+                    color="gray"
+                    sx={{ minWidth: "5rem", maxWidth: "5rem", mr: "0.5rem" }}
+                  >
+                    Position Balance{" "}
+                  </Typography>
+                  <TextField
+                    disabled
+                    value={positionBalance.toFixed(6)}
+                    variant="standard"
+                    placeholder="0"
+                    InputProps={{
+                      disableUnderline: true,
+                      sx: { fontSize: "2rem" },
+                    }}
+                  />
+                </Box>
                 <Select
-                  value={yieldStrategy}
+                  value={yieldToken}
                   displayEmpty
                   renderValue={renderPlaceholder(
-                    yieldStrategy,
-                    "Select yield strategy option"
+                    yieldToken,
+                    "Select yield strategy"
                   )}
-                  onChange={(e) => setYieldStrategy(e.target.value)}
+                  onChange={(e) => setYieldToken(e.target.value)}
                   variant="standard"
                   sx={{ background: "transparent" }}
                 >
                   {yieldTokens.map((symbol, index) => (
-                    <MenuItem value={symbol} key={`yield-${index}`}>
-                      <Box className="flex fr ai-c">
+                    <MenuItem value={index} key={`yield-${index}`}>
+                      <Box className="flex ai-c">
                         <Typography>{symbol}</Typography>
                       </Box>
                     </MenuItem>
                   ))}
                 </Select>
               </Box>
-              <Typography color="gray">${toAmount}</Typography>
             </Box>
-            <Box
-              sx={{
-                p: "0.5rem 1rem",
-                my: "0.5rem",
-                borderRadius: "1rem",
-                border: "1px solid gray",
-              }}
-            >
-              <Box className="flex fr ai-c fj-sb">
-                <TextField
-                  value={loanAmount}
-                  onChange={handleAmountChange}
-                  variant="standard"
-                  placeholder="0"
-                  InputProps={{
-                    disableUnderline: true,
-                    sx: { fontSize: "2rem" },
-                  }}
-                />
-                <Select
-                  value={loanAsset}
-                  displayEmpty
-                  renderValue={renderPlaceholder(
-                    loanAsset,
-                    "Select loan asset"
-                  )}
-                  onChange={(e) => setLoanAsset(e.target.value)}
-                  variant="standard"
-                  sx={{ background: "transparent" }}
-                >
-                  {Object.entries(currencies)
-                    .filter(([x]) => loanAssets.includes(x))
-                    .map(([symbol, { icon }]) => (
-                      <MenuItem value={symbol} key={`loan-${symbol}`}>
-                        <Box className="flex fr ai-c">
-                          <img
-                            style={{
-                              height: "28px",
-                              width: "28px",
-                              marginRight: "5px",
-                            }}
-                            src={icon}
-                            alt={`${symbol}-icon`}
-                          />
-                          <Typography>{symbol}</Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
-                </Select>
+            <Box className="flex ai-c fj-c">
+              <Button
+                variant="standard"
+                sx={{ color: "white", alignSelf: "center" }}
+                onClick={() => setShowLoans(!showLoans)}
+              >
+                {showLoans ? <ExpandLessOutlined /> : <ExpandMoreOutlined />}
+              </Button>
+            </Box>
+            {showLoans && (
+              <Box
+                sx={{
+                  p: "0.5rem 1rem",
+                  my: "0.5rem",
+                  borderRadius: "1rem",
+                  border: "1px solid gray",
+                }}
+              >
+                <Box className="flex ai-c fj-sb">
+                  <TextField
+                    value={loanAmount}
+                    onChange={(e) => handleAmountChange(e.target.value, 1)}
+                    variant="standard"
+                    placeholder="0"
+                    sx={{ mr: "0.5rem" }}
+                    InputProps={{
+                      disableUnderline: true,
+                      sx: { fontSize: "2rem" },
+                    }}
+                  />
+                  <Select
+                    value={loanAsset}
+                    displayEmpty
+                    renderValue={renderPlaceholder(
+                      loanAsset,
+                      "Select loan asset"
+                    )}
+                    onChange={(e) => setLoanAsset(e.target.value)}
+                    variant="standard"
+                    sx={{ background: "transparent" }}
+                  >
+                    {Object.entries(currencies)
+                      .filter(([x]) => loanAssets.includes(x))
+                      .map(([symbol, { icon }]) => (
+                        <MenuItem value={symbol} key={`loan-${symbol}`}>
+                          <Box className="flex ai-c">
+                            <img
+                              style={{
+                                height: "28px",
+                                width: "28px",
+                                marginRight: "5px",
+                              }}
+                              src={icon}
+                              alt={`${symbol}-icon`}
+                            />
+                            <Typography>{symbol}</Typography>
+                          </Box>
+                        </MenuItem>
+                      ))}
+                  </Select>
+                </Box>
+                <Box className="flex ai-c fj-sb">
+                  <Typography color="gray">${Number(loanAmount)}</Typography>
+                  <Typography className="flex ai-c" color="gray">
+                    Borrowable Limit:{" "}
+                    {(+utils.formatUnits(
+                      maximumAmount,
+                      depositDecimals
+                    )).toFixed(4)}
+                    &nbsp;
+                    <Typography
+                      onClick={setMaxBorrow}
+                      color="white"
+                      sx={{ cursor: "pointer" }}
+                    >
+                      MAX
+                    </Typography>
+                  </Typography>
+                </Box>
               </Box>
-              <Typography>${loanAmount}</Typography>
-            </Box>
+            )}
             <Button
               className="w100"
               sx={{
@@ -253,19 +478,30 @@ export default () => {
                 borderRadius: "1rem",
                 color: "black",
                 fontSize: "20px",
+                mt: "0.5rem",
                 ":hover": { background: "lightgray" },
               }}
               variant="contained"
-              disabled={
-                connected &&
-                (depositAsset.length === 0 ||
-                  Number(fromAmount) === 0 ||
-                  yieldStrategy.length === 0 ||
-                  Number(toAmount) === 0)
-              }
+              disabled={shouldDisable}
               onClick={handleDeposit}
             >
-              {connected ? "Deposit" : "Connect Wallet"}
+              {isPending ? (
+                <CircularProgress size="1.75rem" />
+              ) : connected ? (
+                depositBalanceInsufficient ? (
+                  "Insufficient Balance"
+                ) : depositAllowanceInsufficient ? (
+                  `Approve ${depositAsset}`
+                ) : !showLoans ? (
+                  "Deposit"
+                ) : loanAmountExceedsLimit ? (
+                  "Exceed Maximum Mintable Amount"
+                ) : (
+                  "Deposit & Borrow"
+                )
+              ) : (
+                "Connect Wallet"
+              )}
             </Button>
           </Box>
         </Grid>

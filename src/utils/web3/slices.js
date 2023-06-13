@@ -1,6 +1,7 @@
-import { Contract } from "ethers";
 import { useEffect, useState } from "react";
-import { addresses } from "./addresses";
+import { BigNumber, Contract, utils } from "ethers";
+import { addresses, getAlchemistAddress } from "./addresses";
+import { currencies } from "./currencies";
 import { availableChains } from "./chains";
 import alchemistAbi from "../abis/alchemist.json";
 import erc20Abi from "../abis/erc20.json";
@@ -92,7 +93,175 @@ export const useYieldTokens = (chainId, provider) => {
   return { mapping };
 };
 
+export const useAlchemixPosition = (
+  depositAsset,
+  yieldToken,
+  address,
+  chainId,
+  provider,
+  isPending
+) => {
+  const [position, setPosition] = useState({ balance: 0, weight: 0 });
+
+  useEffect(() => {
+    const fetch = async () => {
+      const alchemist = new Contract(
+        getAlchemistAddress(chainId, depositAsset),
+        alchemistAbi,
+        provider
+      );
+      const data = await alchemist["positions"](address, yieldToken);
+      setPosition({
+        balance: +utils.formatEther(data.shares),
+        weight: +utils.formatEther(data.lastAccruedWeight),
+      });
+    };
+
+    if (chainId > 0 && address.length > 0 && !!provider && !!yieldToken)
+      fetch();
+  }, [chainId, provider, depositAsset, address, yieldToken, isPending]);
+
+  return { ...position };
+};
+
+export const useTokenInfo = (symbol, address, chainId, provider, isPending) => {
+  const [balance, setBalance] = useState(BigNumber.from(0));
+  const [allowance, setAllowance] = useState(BigNumber.from(0));
+
+  useEffect(() => {
+    const fetch = async () => {
+      const token = new Contract(
+        currencies[symbol].addresses[chainId],
+        erc20Abi,
+        provider
+      );
+      setBalance(await token["balanceOf"](address));
+      setAllowance(
+        await token["allowance"](address, getAlchemistAddress(chainId, symbol))
+      );
+    };
+
+    if (symbol.length > 0 && address.length > 0 && !!provider) fetch();
+  }, [symbol, address, chainId, provider, isPending]);
+
+  return { balance, allowance };
+};
+
+export const useMaximumMintableAmount = (
+  depositAsset,
+  depositAmount,
+  address,
+  chainId,
+  provider
+) => {
+  const [maximumAmount, setMaximumAmount] = useState(BigNumber.from(0));
+
+  useEffect(() => {
+    const fetch = async () => {
+      const alchemist = new Contract(
+        getAlchemistAddress(chainId, depositAsset),
+        alchemistAbi,
+        provider
+      );
+      const minimumCollateralization = await alchemist[
+        "minimumCollateralization"
+      ]();
+      const account = await alchemist["accounts"](address);
+      const yieldTokenParameters = await Promise.all(
+        account.depositedTokens.map((x) =>
+          alchemist["getYieldTokenParameters"](x)
+        )
+      );
+      const positions = await Promise.all(
+        account.depositedTokens.map((x) => alchemist["positions"](address, x))
+      );
+      let userTotalDeposit = utils.parseUnits(
+        Number(depositAmount).toString(),
+        currencies[depositAsset]?.decimals || 18
+      );
+      yieldTokenParameters.forEach((param, index) => {
+        userTotalDeposit = userTotalDeposit.add(
+          param.activeBalance
+            .sub(param.harvestableBalance)
+            .mul(positions[index].shares)
+            .div(param.totalShares)
+        );
+      });
+      setMaximumAmount(
+        userTotalDeposit
+          .mul(utils.parseEther("1"))
+          .div(minimumCollateralization)
+          .sub(account.debt)
+      );
+    };
+
+    if (address.length > 0 && depositAsset.length > 0 && !!provider) fetch();
+  }, [address, depositAsset, depositAmount, chainId, provider]);
+
+  return { maximumAmount };
+};
+
 export const getTokenSymbol = async (address, provider) => {
   const token = new Contract(address, erc20Abi, provider);
   return await token["symbol"]();
+};
+
+export const approveToken = async (symbol, amount, address, provider) => {
+  const alchemist = getAlchemistAddress(provider.network.chainId, symbol);
+  const signer = provider.getSigner();
+  const token = new Contract(
+    currencies[symbol].addresses[provider.network.chainId],
+    erc20Abi,
+    signer
+  );
+  if (symbol === "USDT") {
+    const allowance = await token["allowance"](address, alchemist);
+    if (!allowance.isZero()) {
+      const tx = await token["approve"](alchemist, BigNumber.from(0));
+      await tx.wait();
+    }
+  }
+  return token["approve"](alchemist, amount);
+};
+
+export const depositUnderlying = (
+  depositAsset,
+  yieldToken,
+  amount,
+  address,
+  provider
+) => {
+  const alchemist = new Contract(
+    getAlchemistAddress(provider.network.chainId, depositAsset),
+    alchemistAbi,
+    provider.getSigner()
+  );
+  return alchemist["depositUnderlying"](yieldToken, amount, address, 0);
+};
+
+export const depositAndBorrow = (
+  depositAsset,
+  yieldToken,
+  depositAmount,
+  borrowAmount,
+  address,
+  provider
+) => {
+  const alchemist = new Contract(
+    getAlchemistAddress(provider.network.chainId, depositAsset),
+    alchemistAbi,
+    provider.getSigner()
+  );
+  const iface = new utils.Interface(alchemistAbi);
+  const calls = [];
+  calls.push(
+    iface.encodeFunctionData("depositUnderlying", [
+      yieldToken,
+      depositAmount,
+      address,
+      0,
+    ])
+  );
+  calls.push(iface.encodeFunctionData("mint", [borrowAmount, address]));
+  return alchemist["multicall"](calls);
 };
