@@ -7,3 +7,10 @@ export const addressEllipsis = (address, length = 4) => {
     address.length - length
   )}`;
 };
+
+export const getLocalItem = (key, defaultValue) =>
+  window.localStorage.getItem(key) || defaultValue;
+
+export const setLocalItem = (key, value) => (window.localStorage[key] = value);
+
+export const clearLocalItems = () => window.localStorage.clear();

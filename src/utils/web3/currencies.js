@@ -8,7 +8,7 @@ export const currencies = {
     name: "Ethereum",
     symbol: "ETH",
     decimals: 18,
-    icon: assets.ALUSD,
+    icon: assets.ETH,
     addresses: {
       [ChainIds.Ethereum]: constants.AddressZero,
       [ChainIds.Optimism]: constants.AddressZero,

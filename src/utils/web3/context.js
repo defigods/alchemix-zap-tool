@@ -10,6 +10,7 @@ import Web3Modal from "web3modal";
 import * as UAuthWeb3Modal from "@uauth/web3modal";
 import { JsonRpcProvider, Web3Provider } from "@ethersproject/providers";
 import { ChainIds, availableChains } from "./chains";
+import { clearLocalItems, getLocalItem, setLocalItem } from "../helper";
 
 const Web3Context = createContext(null);
 
@@ -32,18 +33,6 @@ export const Web3ContextProvider = ({ children }) => {
   const [address, setAddress] = useState("");
   const [provider, setProvider] = useState(null);
 
-  const updateChainDetails = () => {
-    const cid = parseInt(window.ethereum.chainId, 16);
-    if (!Object.keys(availableChains).includes("" + cid)) return;
-    setChainId(cid);
-    setProvider(new JsonRpcProvider(availableChains[cid].rpcUrl));
-  };
-
-  useEffect(() => {
-    window.ethereum.on("chainChanged", updateChainDetails);
-    updateChainDetails();
-  }, []);
-
   const hasCachedProvider = useCallback(() => {
     if (!web3Modal) return false;
     UAuthWeb3Modal.registerWeb3Modal(web3Modal);
@@ -52,10 +41,10 @@ export const Web3ContextProvider = ({ children }) => {
 
   const disconnect = useCallback(async () => {
     web3Modal.clearCachedProvider();
-    setConnected(false);
+    clearLocalItems();
 
-    setTimeout(() => window.location.reload(), 1);
-  }, []);
+    connected && setTimeout(() => window.location.reload(), 1);
+  }, [connected]);
 
   const _initListeners = useCallback(
     (rawProvider) => {
@@ -74,10 +63,17 @@ export const Web3ContextProvider = ({ children }) => {
         } else {
           newChainId = parseInt(chain, 16);
         }
-        setChainId(newChainId);
-        if (!Object.keys(availableChains).includes(newChainId))
-          await disconnect();
-        setTimeout(() => window.location.reload(), 1);
+        if (!Object.keys(availableChains).includes("" + newChainId)) {
+          setProvider(null);
+          disconnect();
+        } else {
+          setChainId(newChainId);
+          setProvider(
+            new JsonRpcProvider(availableChains[newChainId].rpcUrls[0])
+          );
+          setLocalItem("connected_chain", newChainId);
+        }
+        // setTimeout(() => window.location.reload(), 1);
       });
 
       rawProvider.on("network", (_newNetwork, oldNetwork) => {
@@ -88,8 +84,8 @@ export const Web3ContextProvider = ({ children }) => {
     [disconnect]
   );
 
-  const switchToEthereum = async () => {
-    const chainId = "0x" + ChainIds.Ethereum.toString(16);
+  const switchChain = useCallback(async (targetChain) => {
+    const chainId = "0x" + targetChain.toString(16);
     try {
       await window.ethereum.request({
         method: "wallet_switchEthereumChain",
@@ -104,10 +100,14 @@ export const Web3ContextProvider = ({ children }) => {
             params: [
               {
                 chainId,
-                chainName: "Ethereum",
-                nativeCurrency: { symbol: "ETH", decimals: 18 },
-                blockExplorerUrls: "https://.etherscan.io/",
-                rpcUrls: availableChains[chainId].rpcUrl,
+                chainName: availableChains[targetChain].chainName,
+                nativeCurrency: {
+                  symbol: availableChains[targetChain].symbol,
+                  decimals: availableChains[targetChain].decimals,
+                },
+                blockExplorerUrls:
+                  availableChains[targetChain].blockExplorerUrls,
+                rpcUrls: availableChains[targetChain].rpcUrls,
               },
             ],
           });
@@ -121,40 +121,75 @@ export const Web3ContextProvider = ({ children }) => {
         return false;
       }
     }
-  };
+  }, []);
 
-  const connect = useCallback(async () => {
-    const rawProvider = await web3Modal.connect();
-
-    _initListeners(rawProvider);
-    const connectedProvider = new Web3Provider(rawProvider, "any");
-    const chainId = await connectedProvider
-      .getNetwork()
-      .then((network) =>
-        typeof network.chainId === "number"
-          ? network.chainId
-          : parseInt(network.chainId, 16)
-      );
-    const connectedAddress = await connectedProvider.getSigner().getAddress();
-
-    if (!Object.keys(availableChains).includes("" + chainId)) {
-      web3Modal.clearCachedProvider();
-      const switched = await switchToEthereum();
-      if (!switched) {
-        console.error(
-          "Unable to connect. Please change network using provider."
-        );
-        return;
+  const connect = useCallback(
+    async (targetChain = ChainIds.Ethereum) => {
+      if (!Object.keys(availableChains).includes("" + targetChain)) {
+        web3Modal.clearCachedProvider();
+        const switched = await switchChain(ChainIds.Ethereum);
+        if (!switched) {
+          console.error(
+            "Unable to connect. Please change network using provider."
+          );
+          return;
+        }
       }
-    }
 
-    setChainId(chainId);
-    setAddress(connectedAddress);
-    setProvider(connectedProvider);
-    setConnected(true);
+      let rawProvider = await web3Modal.connect();
 
-    return connectedProvider;
-  }, [_initListeners]);
+      _initListeners(rawProvider);
+      let connectedProvider = new Web3Provider(rawProvider, "any");
+      let connectedChainId = await connectedProvider
+        .getNetwork()
+        .then((network) =>
+          typeof network.chainId === "number"
+            ? network.chainId
+            : parseInt(network.chainId, 16)
+        );
+
+      if (connectedChainId !== targetChain) {
+        web3Modal.clearCachedProvider();
+        const switched = await switchChain(targetChain);
+        if (!switched) {
+          console.error(
+            "Unable to connect. Please change network using provider."
+          );
+          return;
+        }
+      }
+
+      rawProvider = await web3Modal.connect();
+
+      _initListeners(rawProvider);
+      connectedProvider = new Web3Provider(rawProvider, "any");
+      connectedChainId = await connectedProvider
+        .getNetwork()
+        .then((network) =>
+          typeof network.chainId === "number"
+            ? network.chainId
+            : parseInt(network.chainId, 16)
+        );
+
+      const connectedAddress = await connectedProvider.getSigner().getAddress();
+
+      setChainId(connectedChainId);
+      setAddress(connectedAddress);
+      setProvider(connectedProvider);
+      setConnected(true);
+      setLocalItem("connected_chain", connectedChainId);
+      setLocalItem("connected_address", connectedAddress);
+      setLocalItem("connected_state", true);
+
+      return connectedProvider;
+    },
+    [_initListeners, switchChain]
+  );
+
+  useEffect(() => {
+    if (getLocalItem("connected_state"))
+      connect(+getLocalItem("connected_chain", ChainIds.Ethereum));
+  }, [connect]);
 
   const onChainProvider = useMemo(
     () => ({
@@ -166,6 +201,7 @@ export const Web3ContextProvider = ({ children }) => {
       chainId,
       web3Modal,
       hasCachedProvider,
+      switchChain,
     }),
     [
       connect,
@@ -175,6 +211,7 @@ export const Web3ContextProvider = ({ children }) => {
       address,
       chainId,
       hasCachedProvider,
+      switchChain,
     ]
   );
 

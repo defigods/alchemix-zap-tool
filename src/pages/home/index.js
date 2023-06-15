@@ -1,5 +1,5 @@
 /* eslint-disable import/no-anonymous-default-export */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   Grid,
@@ -27,10 +27,8 @@ import {
 } from "../../utils";
 import { ExpandLessOutlined, ExpandMoreOutlined } from "@mui/icons-material";
 
-const renderPlaceholder = (value, text) =>
-  value.length === 0 || value < 0
-    ? () => <Typography>{text}</Typography>
-    : undefined;
+const renderPlaceholder = (isEmpty, text) =>
+  isEmpty ? () => <Typography>{text}</Typography> : undefined;
 
 export default () => {
   const { address, chainId, connected, connect, provider } = useWeb3Context();
@@ -43,17 +41,15 @@ export default () => {
   const [depositAmount, setDepositAmount] = useState("");
   const [yieldTokens, setYieldTokens] = useState([]);
   const [yieldToken, setYieldToken] = useState(-1);
-  const [showLoans, setShowLoans] = useState(false);
+  const [showLoans, setShowLoans] = useState(true);
   const [loanAssets, setLoanAssets] = useState([]);
   const [loanAsset, setLoanAsset] = useState("");
   const [loanAmount, setLoanAmount] = useState("");
 
   const { balance: positionBalance } = useAlchemixPosition(
     depositAsset,
-    yieldToken > -1 &&
-      mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
-        yieldToken
-      ],
+    mapping,
+    yieldToken,
     address,
     chainId,
     provider,
@@ -75,7 +71,9 @@ export default () => {
   );
 
   const depositDecimals = useMemo(() => {
-    return currencies[depositAsset]?.decimals || 18;
+    return (
+      currencies[depositAsset === "ETH" ? "WETH" : depositAsset]?.decimals || 18
+    );
   }, [depositAsset]);
 
   const depositBalanceInsufficient = useMemo(
@@ -86,7 +84,7 @@ export default () => {
   const depositAllowanceInsufficient = useMemo(
     () =>
       +depositAmount > +utils.formatUnits(depositAllowance, depositDecimals),
-    [depositAmount, depositAllowance, depositDecimals]
+    [depositAllowance, depositAmount, depositDecimals]
   );
 
   const loanDecimals = useMemo(() => {
@@ -95,38 +93,67 @@ export default () => {
 
   const loanAmountExceedsLimit = useMemo(
     () => +loanAmount > +utils.formatUnits(maximumAmount, depositDecimals),
-    [loanAmount, maximumAmount, depositDecimals]
+    [depositDecimals, loanAmount, maximumAmount]
   );
+
+  useEffect(() => {
+    setUnderlyingTokens([]);
+    setDepositAsset("");
+    setYieldTokens([]);
+    setYieldToken(-1);
+    setLoanAssets([]);
+    setLoanAsset("");
+  }, [chainId, provider]);
 
   useEffect(() => {
     const fetch = async () => {
       try {
-        setUnderlyingTokens(
-          await Promise.all(tokens.map((x) => getTokenSymbol(x, provider)))
+        let symbols = await Promise.all(
+          tokens.map((x) => getTokenSymbol(x, provider))
         );
+        if (chainId !== ChainIds.Fantom) symbols = ["ETH", ...symbols];
+        setUnderlyingTokens(symbols);
       } catch (e) {
         console.error(`Error fetching underlying token symbols, ${e}`);
       }
     };
-    fetch();
-  }, [provider, tokens]);
+
+    if (tokens.length > 0) fetch();
+    else setDepositAsset("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokens]);
+
+  useEffect(() => setShowLoans(depositAsset !== "ETH"), [depositAsset]);
+
+  const fetchYieldTokens = useCallback(async () => {
+    try {
+      setYieldTokens(
+        await Promise.all(
+          (
+            mapping[
+              currencies[
+                depositAsset === "ETH" ? "WETH" : depositAsset
+              ].addresses[chainId].toLowerCase()
+            ] || []
+          ).map((x) => getTokenSymbol(x, provider))
+        )
+      );
+    } catch (e) {
+      console.error(`Error fetching yield token symbols, ${e}`);
+    }
+  }, [chainId, depositAsset, mapping, provider]);
 
   useEffect(() => {
-    const fetch = async () => {
-      try {
-        setYieldTokens(
-          await Promise.all(
-            (
-              mapping[
-                currencies[depositAsset].addresses[chainId].toLowerCase()
-              ] || []
-            ).map((x) => getTokenSymbol(x, provider))
-          )
-        );
-      } catch (e) {
-        console.error(`Error fetching yield token symbols, ${e}`);
-      }
-    };
+    fetchYieldTokens();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping]);
+
+  useEffect(() => {
+    setYieldTokens([]);
+    setYieldToken(-1);
+    setLoanAssets([]);
+    setLoanAsset("");
+    fetchYieldTokens();
     if (depositAsset.length > 0) {
       const assets = [];
       // TODO: allow for next version
@@ -134,10 +161,9 @@ export default () => {
       if (chainId !== ChainIds.Fantom || !depositAsset.includes("ETH"))
         assets.push(`AL${depositAsset.includes("ETH") ? "ETH" : "USD"}`);
       setLoanAssets(assets);
-      setYieldToken(-1);
-      fetch();
     }
-  }, [provider, mapping, depositAsset, chainId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depositAsset]);
 
   useEffect(() => {
     setDepositAmount(getAmountForDecimals(depositAmount, depositAsset));
@@ -158,17 +184,17 @@ export default () => {
                   loanAmountExceedsLimit ||
                   loanAsset.length === 0)))))),
     [
-      isPending,
       connected,
-      depositAsset,
-      depositAmount,
-      depositBalanceInsufficient,
       depositAllowanceInsufficient,
-      yieldToken,
-      showLoans,
+      depositAmount,
+      depositAsset,
+      depositBalanceInsufficient,
+      isPending,
       loanAmount,
       loanAmountExceedsLimit,
       loanAsset,
+      showLoans,
+      yieldToken,
     ]
   );
 
@@ -205,7 +231,7 @@ export default () => {
 
   const handleDeposit = async () => {
     if (!connected) {
-      connect();
+      connect(chainId);
       return;
     }
 
@@ -216,14 +242,11 @@ export default () => {
         const tx = await approveToken(depositAsset, amount, address, provider);
         await tx.wait();
       } catch (e) {
-        console.error("Approve failure", e);
+        console.error(`Approve failure, ${e}`);
       } finally {
         setPending(false);
         return;
       }
-    }
-
-    if (!showLoans) {
     }
 
     try {
@@ -231,10 +254,11 @@ export default () => {
 
       let tx;
 
+      const depositAssetKey = depositAsset === "ETH" ? "WETH" : depositAsset;
       if (!showLoans)
         tx = await depositUnderlying(
           depositAsset,
-          mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
+          mapping[currencies[depositAssetKey].addresses[chainId].toLowerCase()][
             yieldToken
           ],
           amount,
@@ -244,7 +268,7 @@ export default () => {
       else
         tx = await depositAndBorrow(
           depositAsset,
-          mapping[currencies[depositAsset].addresses[chainId].toLowerCase()][
+          mapping[currencies[depositAssetKey].addresses[chainId].toLowerCase()][
             yieldToken
           ],
           amount,
@@ -254,7 +278,7 @@ export default () => {
         );
       await tx.wait();
     } catch (e) {
-      console.error("Deposit failure", e);
+      console.error(`Deposit failure ${e}`);
     } finally {
       setPending(false);
     }
@@ -296,7 +320,7 @@ export default () => {
                   value={depositAsset}
                   displayEmpty
                   renderValue={renderPlaceholder(
-                    depositAsset,
+                    underlyingTokens.length === 0 || depositAsset.length === 0,
                     "Select deposit asset"
                   )}
                   onChange={(e) => setDepositAsset(e.target.value)}
@@ -356,7 +380,7 @@ export default () => {
                     color="gray"
                     sx={{ minWidth: "5rem", maxWidth: "5rem", mr: "0.5rem" }}
                   >
-                    Position Balance{" "}
+                    Current Balance{" "}
                   </Typography>
                   <TextField
                     disabled
@@ -373,7 +397,7 @@ export default () => {
                   value={yieldToken}
                   displayEmpty
                   renderValue={renderPlaceholder(
-                    yieldToken,
+                    yieldTokens.length === 0 || yieldToken < 0,
                     "Select yield strategy"
                   )}
                   onChange={(e) => setYieldToken(e.target.value)}
@@ -394,6 +418,7 @@ export default () => {
               <Button
                 variant="standard"
                 sx={{ color: "white", alignSelf: "center" }}
+                disabled={!showLoans && depositAsset === "ETH"}
                 onClick={() => setShowLoans(!showLoans)}
               >
                 {showLoans ? <ExpandLessOutlined /> : <ExpandMoreOutlined />}
@@ -424,7 +449,7 @@ export default () => {
                     value={loanAsset}
                     displayEmpty
                     renderValue={renderPlaceholder(
-                      loanAsset,
+                      loanAssets.length === 0 || loanAsset.length === 0,
                       "Select loan asset"
                     )}
                     onChange={(e) => setLoanAsset(e.target.value)}

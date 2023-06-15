@@ -1,3 +1,5 @@
+import * as assets from "../../assets";
+
 export const ChainIds = {
   Ethereum: 1,
   Optimism: 10,
@@ -6,23 +8,26 @@ export const ChainIds = {
 
 export const availableChains = {
   [ChainIds.Ethereum]: {
-    networkName: "Ethereum",
-    rpcUrl: "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213",
+    chainName: "Ethereum Mainnet",
+    rpcUrls: ["https://mainnet.infura.io/v3/84842078b09946638c03157f83405213"],
     decimals: 18,
     symbol: "ETH",
-    blockExplorerUrls: "https://etherscan.io/",
+    icon: assets.ETH,
+    blockExplorerUrls: ["https://etherscan.io/"],
   },
   [ChainIds.Optimism]: {
-    networkName: "Optimism",
-    rpcUrl:
+    chainName: "Optimism Mainnet",
+    rpcUrls: [
       "https://opt-mainnet.g.alchemy.com/v2/G1ZLf13J0Pwr-OgfeTFEoFaPHW8LOrrn",
+    ],
     decimals: 18,
     symbol: "ETH",
-    blockExplorerUrls: "https://optimistic.etherscan.io/",
+    icon: assets.OPETH,
+    blockExplorerUrls: ["https://optimistic.etherscan.io/"],
   },
   [ChainIds.Fantom]: {
-    networkName: "Fantom Opera",
-    rpcUrl: "https://rpc.ftm.tools",
+    chainName: "Fantom Opera",
+    rpcUrls: ["https://rpc.ftm.tools"],
     /*
     "https://rpc.ankr.com/fantom",
     "https://rpc3.fantom.network",
@@ -32,7 +37,8 @@ export const availableChains = {
     */
     decimals: 18,
     symbol: "FTM",
-    blockExplorerUrls: "https://ftmscan.com/",
+    icon: assets.FTM,
+    blockExplorerUrls: ["https://ftmscan.com/"],
   },
 };
 

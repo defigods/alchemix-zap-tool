@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { BigNumber, Contract, utils } from "ethers";
+import { BigNumber, Contract, constants, utils } from "ethers";
 import { addresses, getAlchemistAddress } from "./addresses";
 import { currencies } from "./currencies";
 import { availableChains } from "./chains";
 import alchemistAbi from "../abis/alchemist.json";
+import gatewayAbi from "../abis/gateway.json";
 import erc20Abi from "../abis/erc20.json";
 
 export const useUnderlyingTokens = (chainId, provider) => {
@@ -27,7 +28,7 @@ export const useUnderlyingTokens = (chainId, provider) => {
         data = [...dataETH, ...data];
       } catch (e) {
         console.warn(
-          `not supporting alchemist eth in ${availableChains[chainId].networkName}`
+          `not supporting alchemist eth in ${availableChains[chainId].chainName}`
         );
       }
       setTokens(data);
@@ -81,7 +82,7 @@ export const useYieldTokens = (chainId, provider) => {
         }
       } catch (e) {
         console.warn(
-          `not supporting alchemist eth in ${availableChains[chainId].networkName}`
+          `not supporting alchemist eth in ${availableChains[chainId].chainName}`
         );
       }
       setMapping(finalData);
@@ -95,7 +96,8 @@ export const useYieldTokens = (chainId, provider) => {
 
 export const useAlchemixPosition = (
   depositAsset,
-  yieldToken,
+  mapping,
+  yieldTokenIndex,
   address,
   chainId,
   provider,
@@ -105,21 +107,45 @@ export const useAlchemixPosition = (
 
   useEffect(() => {
     const fetch = async () => {
-      const alchemist = new Contract(
-        getAlchemistAddress(chainId, depositAsset),
-        alchemistAbi,
-        provider
-      );
-      const data = await alchemist["positions"](address, yieldToken);
-      setPosition({
-        balance: +utils.formatEther(data.shares),
-        weight: +utils.formatEther(data.lastAccruedWeight),
-      });
+      try {
+        const yieldToken =
+          mapping[
+            currencies[
+              depositAsset === "ETH" ? "WETH" : depositAsset
+            ].addresses[chainId].toLowerCase()
+          ][yieldTokenIndex];
+        const alchemist = new Contract(
+          getAlchemistAddress(chainId, depositAsset),
+          alchemistAbi,
+          provider
+        );
+        const data = await alchemist["positions"](address, yieldToken);
+        setPosition({
+          balance: +utils.formatEther(data.shares),
+          weight: +utils.formatEther(data.lastAccruedWeight),
+        });
+      } catch (e) {
+        console.warn(`Error fetching yield tokens, ${e}`);
+      }
     };
 
-    if (chainId > 0 && address.length > 0 && !!provider && !!yieldToken)
+    if (
+      chainId > 0 &&
+      address.length > 0 &&
+      depositAsset.length > 0 &&
+      !!provider &&
+      yieldTokenIndex > -1
+    )
       fetch();
-  }, [chainId, provider, depositAsset, address, yieldToken, isPending]);
+  }, [
+    address,
+    chainId,
+    depositAsset,
+    mapping,
+    provider,
+    yieldTokenIndex,
+    isPending,
+  ]);
 
   return { ...position };
 };
@@ -130,19 +156,31 @@ export const useTokenInfo = (symbol, address, chainId, provider, isPending) => {
 
   useEffect(() => {
     const fetch = async () => {
-      const token = new Contract(
-        currencies[symbol].addresses[chainId],
-        erc20Abi,
-        provider
-      );
-      setBalance(await token["balanceOf"](address));
-      setAllowance(
-        await token["allowance"](address, getAlchemistAddress(chainId, symbol))
-      );
+      try {
+        if (symbol === "ETH") {
+          setBalance(await provider.getBalance(address));
+          setAllowance(constants.MaxUint256);
+          return;
+        }
+        const token = new Contract(
+          currencies[symbol].addresses[chainId],
+          erc20Abi,
+          provider
+        );
+        setBalance(await token["balanceOf"](address));
+        setAllowance(
+          await token["allowance"](
+            address,
+            getAlchemistAddress(chainId, symbol)
+          )
+        );
+      } catch (e) {
+        console.warn(`Error fetching token info, ${e}`);
+      }
     };
 
     if (symbol.length > 0 && address.length > 0 && !!provider) fetch();
-  }, [symbol, address, chainId, provider, isPending]);
+  }, [address, chainId, provider, symbol, isPending]);
 
   return { balance, allowance };
 };
@@ -158,45 +196,49 @@ export const useMaximumMintableAmount = (
 
   useEffect(() => {
     const fetch = async () => {
-      const alchemist = new Contract(
-        getAlchemistAddress(chainId, depositAsset),
-        alchemistAbi,
-        provider
-      );
-      const minimumCollateralization = await alchemist[
-        "minimumCollateralization"
-      ]();
-      const account = await alchemist["accounts"](address);
-      const yieldTokenParameters = await Promise.all(
-        account.depositedTokens.map((x) =>
-          alchemist["getYieldTokenParameters"](x)
-        )
-      );
-      const positions = await Promise.all(
-        account.depositedTokens.map((x) => alchemist["positions"](address, x))
-      );
-      let userTotalDeposit = utils.parseUnits(
-        Number(depositAmount).toString(),
-        currencies[depositAsset]?.decimals || 18
-      );
-      yieldTokenParameters.forEach((param, index) => {
-        userTotalDeposit = userTotalDeposit.add(
-          param.activeBalance
-            .sub(param.harvestableBalance)
-            .mul(positions[index].shares)
-            .div(param.totalShares)
+      try {
+        const alchemist = new Contract(
+          getAlchemistAddress(chainId, depositAsset),
+          alchemistAbi,
+          provider
         );
-      });
-      setMaximumAmount(
-        userTotalDeposit
-          .mul(utils.parseEther("1"))
-          .div(minimumCollateralization)
-          .sub(account.debt)
-      );
+        const minimumCollateralization = await alchemist[
+          "minimumCollateralization"
+        ]();
+        const account = await alchemist["accounts"](address);
+        const yieldTokenParameters = await Promise.all(
+          account.depositedTokens.map((x) =>
+            alchemist["getYieldTokenParameters"](x)
+          )
+        );
+        const positions = await Promise.all(
+          account.depositedTokens.map((x) => alchemist["positions"](address, x))
+        );
+        let userTotalDeposit = utils.parseUnits(
+          Number(depositAmount).toString(),
+          currencies[depositAsset]?.decimals || 18
+        );
+        yieldTokenParameters.forEach((param, index) => {
+          userTotalDeposit = userTotalDeposit.add(
+            param.activeBalance
+              .sub(param.harvestableBalance)
+              .mul(positions[index].shares)
+              .div(param.totalShares)
+          );
+        });
+        setMaximumAmount(
+          userTotalDeposit
+            .mul(utils.parseEther("1"))
+            .div(minimumCollateralization)
+            .sub(account.debt)
+        );
+      } catch (e) {
+        console.warn(`Error fetching maximum mintable amount, ${e}`);
+      }
     };
 
     if (address.length > 0 && depositAsset.length > 0 && !!provider) fetch();
-  }, [address, depositAsset, depositAmount, chainId, provider]);
+  }, [address, chainId, depositAmount, depositAsset, provider]);
 
   return { maximumAmount };
 };
@@ -231,6 +273,21 @@ export const depositUnderlying = (
   address,
   provider
 ) => {
+  if (depositAsset === "ETH") {
+    const wethGateway = new Contract(
+      addresses[provider.network.chainId].addresses["GATEWAY"],
+      gatewayAbi,
+      provider.getSigner()
+    );
+    return wethGateway["depositUnderlying"](
+      getAlchemistAddress(provider.network.chainId, depositAsset),
+      yieldToken,
+      amount,
+      address,
+      0,
+      { value: amount }
+    );
+  }
   const alchemist = new Contract(
     getAlchemistAddress(provider.network.chainId, depositAsset),
     alchemistAbi,
