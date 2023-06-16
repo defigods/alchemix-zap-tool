@@ -28,7 +28,7 @@ export const useUnderlyingTokens = (chainId, provider) => {
         data = [...dataETH, ...data];
       } catch (e) {
         console.warn(
-          `not supporting alchemist eth in ${availableChains[chainId].chainName}`
+          `Not supporting alchemist eth in ${availableChains[chainId].chainName}`
         );
       }
       setTokens(data);
@@ -82,7 +82,7 @@ export const useYieldTokens = (chainId, provider) => {
         }
       } catch (e) {
         console.warn(
-          `not supporting alchemist eth in ${availableChains[chainId].chainName}`
+          `Not supporting alchemist eth in ${availableChains[chainId].chainName}`
         );
       }
       setMapping(finalData);

@@ -278,7 +278,7 @@ export default () => {
         );
       await tx.wait();
     } catch (e) {
-      console.error(`Deposit failure ${e}`);
+      console.error(`Deposit failure, ${e}`);
     } finally {
       setPending(false);
     }

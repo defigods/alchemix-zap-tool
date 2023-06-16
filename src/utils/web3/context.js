@@ -66,14 +66,7 @@ export const Web3ContextProvider = ({ children }) => {
         if (!Object.keys(availableChains).includes("" + newChainId)) {
           setProvider(null);
           disconnect();
-        } else {
-          setChainId(newChainId);
-          setProvider(
-            new JsonRpcProvider(availableChains[newChainId].rpcUrls[0])
-          );
-          setLocalItem("connected_chain", newChainId);
-        }
-        // setTimeout(() => window.location.reload(), 1);
+        } else connect(newChainId);
       });
 
       rawProvider.on("network", (_newNetwork, oldNetwork) => {
