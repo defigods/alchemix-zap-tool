@@ -355,7 +355,7 @@ export default () => {
                 </Select>
               </Box>
               <Box className="flex ai-c fj-sb">
-                <Typography color="gray">${Number(depositAmount)}</Typography>
+                <Typography color="gray">{Number(depositAmount)}</Typography>
                 <Typography className="flex ai-c" color="gray">
                   Balance:{" "}
                   {(+utils.formatUnits(
@@ -484,7 +484,7 @@ export default () => {
                   </Select>
                 </Box>
                 <Box className="flex ai-c fj-sb">
-                  <Typography color="gray">${Number(loanAmount)}</Typography>
+                  <Typography color="gray">{Number(loanAmount)}</Typography>
                   <Typography className="flex ai-c" color="gray">
                     Borrowable Limit:{" "}
                     {(+utils.formatUnits(
