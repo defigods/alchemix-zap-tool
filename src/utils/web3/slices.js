@@ -248,6 +248,11 @@ export const getTokenSymbol = async (address, provider) => {
   return await token["symbol"]();
 };
 
+export const getTokenNameAndSymbol = async (address, provider) => {
+  const token = new Contract(address, erc20Abi, provider);
+  return `${await token["name"]()} (${await token["symbol"]()})`;
+};
+
 export const approveToken = async (symbol, amount, address, provider) => {
   const alchemist = getAlchemistAddress(provider.network.chainId, symbol);
   const signer = provider.getSigner();

@@ -15,6 +15,7 @@ import {
   currencies,
   useAlchemixPosition,
   getTokenSymbol,
+  getTokenNameAndSymbol,
   useUnderlyingTokens,
   useWeb3Context,
   useYieldTokens,
@@ -108,10 +109,10 @@ export default () => {
   useEffect(() => {
     const fetch = async () => {
       try {
-        let symbols = await Promise.all(
+        const symbols = await Promise.all(
           tokens.map((x) => getTokenSymbol(x, provider))
         );
-        if (chainId !== ChainIds.Fantom) symbols = ["ETH", ...symbols];
+        if (chainId !== ChainIds.Fantom) symbols.splice(0, 0, "ETH");
         setUnderlyingTokens(symbols);
       } catch (e) {
         console.error(`Error fetching underlying token symbols, ${e}`);
@@ -127,17 +128,17 @@ export default () => {
 
   const fetchYieldTokens = useCallback(async () => {
     try {
-      setYieldTokens(
-        await Promise.all(
-          (
-            mapping[
-              currencies[
-                depositAsset === "ETH" ? "WETH" : depositAsset
-              ].addresses[chainId].toLowerCase()
-            ] || []
-          ).map((x) => getTokenSymbol(x, provider))
-        )
+      const tokens = await Promise.all(
+        (
+          mapping[
+            currencies[
+              depositAsset === "ETH" ? "WETH" : depositAsset
+            ].addresses[chainId].toLowerCase()
+          ] || []
+        ).map((x) => getTokenNameAndSymbol(x, provider))
       );
+      setYieldTokens(tokens);
+      if (tokens.length > 0) setYieldToken(0);
     } catch (e) {
       console.error(`Error fetching yield token symbols, ${e}`);
     }
@@ -161,6 +162,7 @@ export default () => {
       if (chainId !== ChainIds.Fantom || !depositAsset.includes("ETH"))
         assets.push(`AL${depositAsset.includes("ETH") ? "ETH" : "USD"}`);
       setLoanAssets(assets);
+      if (assets.length > 0) setLoanAsset(assets[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depositAsset]);
@@ -169,6 +171,11 @@ export default () => {
     setDepositAmount(getAmountForDecimals(depositAmount, depositAsset));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depositAsset]);
+
+  useEffect(() => {
+    if (depositAsset.length > 0)
+      setLoanAmount(utils.formatUnits(maximumAmount, depositDecimals));
+  }, [depositAmount, depositAsset, maximumAmount]);
 
   const shouldDisable = useMemo(
     () =>
@@ -288,7 +295,7 @@ export default () => {
     <Box sx={{ p: "1rem", pt: { md: "5rem", xs: "3rem" } }}>
       <Grid item container columnSpacing={2} rowSpacing={2}>
         <Grid item md={4} sx={{ display: { xs: "none", md: "block" } }} />
-        <Grid item md={4} xs={12} sx={{ pr: "1rem" }}>
+        <Grid item md={4} xs={12}>
           <Box
             sx={{
               p: "0.5rem",
