@@ -8,6 +8,7 @@ import {
   useWeb3Context,
   Web3ContextProvider,
 } from "./utils";
+import { logo } from "./assets";
 
 const Header = () => {
   const { address, chainId, connected, connect, disconnect } = useWeb3Context();
@@ -30,13 +31,34 @@ const Header = () => {
   };
 
   return (
-    <Box className="flex ai-c fj-sb" sx={{ py: "0.5rem", px: "1rem" }}>
-      <Typography
-        sx={{ cursor: "pointer" }}
-        onClick={() => (window.location.href = "/")}
-      >
-        Alchemix Zap Tool
-      </Typography>
+    <Box
+      className="flex ai-c fj-sb"
+      sx={{
+        py: "1rem",
+        px: "2rem",
+        background: "rgb(14 17 22)",
+        borderBottom: "1px solid lightgray",
+      }}
+    >
+      <Box className="flex ai-c">
+        <img
+          src={logo}
+          alt="logo"
+          style={{ width: "44px", height: "44px", marginRight: "0.5rem" }}
+        />
+        <Typography
+          sx={{
+            cursor: "pointer",
+            color: "rgb(245 197 159)",
+            textTransform: "uppercase",
+            fontWeight: "bold",
+            fontSize: "24px",
+          }}
+          onClick={() => (window.location.href = "/")}
+        >
+          Alchemix Zap Tool
+        </Typography>
+      </Box>
       <Box className="flex ai-c">
         <Select
           value={selectedChain}
